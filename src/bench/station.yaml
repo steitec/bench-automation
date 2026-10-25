@@ -1,0 +1,42 @@
+# Station configuration for the embedded PC end-of-line test.
+# To use real hardware, change the resource strings, e.g.
+#   psu: "USB0::0x2A8D::0x1002::MY12345678::INSTR"
+#   console: "/dev/ttyUSB0"
+station: EOL-01
+visa_backend: "@py"          # "@py" = pyvisa-py; use "" for NI-VISA / Keysight IO Libraries
+
+resources:
+  psu: "TCPIP0::127.0.0.1::5025::SOCKET"
+  dmm: "TCPIP0::127.0.0.1::5026::SOCKET"
+  mux: "TCPIP0::127.0.0.1::5027::SOCKET"
+  console: "socket://127.0.0.1:5028"
+console_baudrate: 115200
+
+power:
+  voltage: 12.0
+  current_limit: 3.0
+  inrush_window_s: 0.5       # sample the supply current this long after switch-on
+  inrush_max_a: 2.8
+  min_supply_v: 11.0         # below this the supply is in current limit -> abort
+  idle_current_a: [0.5, 1.1]
+
+rails:                       # multiplexer channel wired to each test point
+  - {name: "5V0",  channel: 101, nominal: 5.0,  tolerance_pct: 5}
+  - {name: "3V3",  channel: 102, nominal: 3.3,  tolerance_pct: 5}
+  - {name: "1V8",  channel: 103, nominal: 1.8,  tolerance_pct: 3}
+  - {name: "1V05", channel: 104, nominal: 1.05, tolerance_pct: 3}
+
+boot:
+  timeout_s: 10
+  login_prompt: 'login:\s*$'
+  user: root
+
+device:
+  serial_pattern: '^EPC-\d{2}-\d{5}$'
+  bios_version: "5.27"
+  min_memory_mb: 7500
+  smart: {max_reallocated: 10, max_pending: 0}
+  usb: {vid_pid: "0781:5567", expected_count: 4}   # one test stick per port
+  ethernet: {interface: eth0, min_speed_mbps: 1000}
+  max_temperature_c: 80
+  max_rtc_drift_s: 120

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "bench-automation"
+version = "0.1.0"
+description = "End-of-line test station for an embedded PC, with simulated SCPI instruments"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "Ralf Steinert" }]
+requires-python = ">=3.10"
+dependencies = ["pyvisa>=1.13", "pyvisa-py>=0.7", "pyserial>=3.5", "pyyaml>=6.0"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+bench = "bench.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+bench = ["station.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
