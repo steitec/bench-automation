@@ -1,9 +1,11 @@
 """Behavioural model of the device under test: a 12 V embedded PC.
 
-The model is shared by all simulated instruments, so the power supply, the
-multiplexer, the multimeter and the serial console all see the same device.
-Timings are given in "device seconds" and divided by ``time_scale`` -- a scale
-of 0.2 runs the device five times faster, which keeps the test suite quick.
+It is a scpi-sim device: its 12 V input ``vin`` is wired to the simulated power
+supply, its four rails to the multiplexer, and its serial console is a TCP port
+of the bench. The supply asks it for its current, the multimeter for its rail
+voltages, and after every instrument command it checks whether its power
+changed. Timings are given in "device seconds" and divided by ``time_scale`` --
+a scale of 0.2 runs the device five times faster, which keeps the test suite quick.
 """
 
 from __future__ import annotations
@@ -12,7 +14,8 @@ import random
 import threading
 import time
 from datetime import datetime
-from typing import Callable
+
+from scpi_sim import Device
 
 FAULTS = {
     "none": "healthy device",
@@ -28,6 +31,9 @@ FAULTS = {
 RAILS = {"5V0": 5.0, "3V3": 3.3, "1V8": 1.8, "1V05": 1.05}
 # Which rail each multiplexer channel is wired to on the test fixture.
 MUX_WIRING = {101: "5V0", 102: "3V3", 103: "1V8", 104: "1V05"}
+
+SHORT_OHMS = 12.0 / 4.5  # the shorted input draws 4.5 A at 12 V
+POWER_PRESENT_V = 0.5    # any input voltage above this counts as "power applied"
 
 INRUSH_END_S = 0.3
 BOOT_DONE_S = 2.5
@@ -52,54 +58,61 @@ HANG_LOG = [
 ]
 
 
-class EmbeddedPC:
+class EmbeddedPC(Device):
+    terminals = {"vin": "input", **{rail: "output" for rail in RAILS}}
+
     def __init__(self, fault: str = "none", time_scale: float = 1.0,
                  serial_number: str = "EPC-24-00137"):
+        super().__init__()
         if fault not in FAULTS:
             raise ValueError(f"unknown fault {fault!r}, choose from {sorted(FAULTS)}")
         self.fault = fault
         self.time_scale = time_scale
         self.serial_number = serial_number
-        self.psu_voltage = 0.0
-        self.psu_current_limit = 1.0
-        self.psu_output = False
-        self.mux_closed: set[int] = set()
         self.state = "off"  # off -> booting -> login -> shell
-        self._power_on_at = 0.0
+        self._power_on_at: float | None = None
         self._generation = 0
         self._lock = threading.Lock()
-        self._console_sinks: list[Callable[[str], None]] = []
         self._rng = random.Random()
 
-    # -- power -------------------------------------------------------------
+    # -- power (called by the bench after every instrument command) ----------
 
-    def set_output(self, on: bool) -> None:
+    def update(self) -> None:
+        powered = self.input_voltage("vin") > POWER_PRESENT_V
         with self._lock:
-            if on == self.psu_output:
+            if powered == (self._power_on_at is not None):
                 return
-            self.psu_output = on
             self._generation += 1
             generation = self._generation
-            if on:
+            if powered:
                 self._power_on_at = time.monotonic()
                 self.state = "booting"
             else:
+                self._power_on_at = None
                 self.state = "off"
-        if on:
+        if powered:
             threading.Thread(target=self._boot, args=(generation,), daemon=True).start()
 
-    def _elapsed(self) -> float:
-        return (time.monotonic() - self._power_on_at) / self.time_scale
+    def power_off(self) -> None:
+        """Forget the power state (stops a running boot), e.g. when the simulator stops."""
+        with self._lock:
+            self._generation += 1
+            self._power_on_at = None
+            self.state = "off"
 
-    def _load_current(self) -> float:
-        """Current the device would draw without a current limit."""
-        if not self.psu_output:
+    def _elapsed(self, power_on_at: float) -> float:
+        return (time.monotonic() - power_on_at) / self.time_scale
+
+    def current(self, terminal: str, volts: float) -> float:
+        """Current drawn at the 12 V input (the supply limits it)."""
+        if volts <= 0:
             return 0.0
         if self.fault == "short":
-            return 4.5
-        if self.psu_voltage < MIN_INPUT_V:
+            return volts / SHORT_OHMS
+        power_on_at = self._power_on_at  # read once: update() runs in other threads
+        if volts < MIN_INPUT_V or power_on_at is None:
             return 0.05
-        t = self._elapsed()
+        t = self._elapsed(power_on_at)
         if t < INRUSH_END_S:
             amps = 2.2
         elif t < BOOT_DONE_S or self.fault == "boot_hang":
@@ -108,50 +121,29 @@ class EmbeddedPC:
             amps = 0.85
         return amps + self._rng.gauss(0, 0.015)
 
-    def output(self) -> tuple[float, float]:
-        """Voltage and current at the supply terminals (constant-current aware)."""
-        if not self.psu_output:
-            return 0.0, 0.0
-        load = self._load_current()
-        if load > self.psu_current_limit:
-            return self.psu_voltage * self.psu_current_limit / load, self.psu_current_limit
-        return self.psu_voltage, load
-
     def input_ok(self) -> bool:
-        return self.output()[0] >= MIN_INPUT_V
+        return self.input_voltage("vin") >= MIN_INPUT_V
 
-    # -- measurement through the fixture -----------------------------------
+    # -- rails, measured through the fixture -----------------------------------
 
-    def rail_voltage(self, rail: str) -> float:
-        if not self.input_ok() or (rail == "1V05" and self.fault == "rail_1v05"):
+    def voltage(self, terminal: str) -> float:
+        if (self._power_on_at is None or not self.input_ok()
+                or (terminal == "1V05" and self.fault == "rail_1v05")):
             return abs(self._rng.gauss(0.02, 0.005))
-        return RAILS[rail] * (1 + self._rng.gauss(0, 0.003))
-
-    def dmm_voltage(self) -> float:
-        rails = [MUX_WIRING[ch] for ch in self.mux_closed if ch in MUX_WIRING]
-        if len(rails) != 1:
-            return self._rng.gauss(0, 0.0005)  # open input, just noise
-        return self.rail_voltage(rails[0])
+        return RAILS[terminal] * (1 + self._rng.gauss(0, 0.003))
 
     # -- serial console ----------------------------------------------------
 
-    def attach_console(self, sink: Callable[[str], None]) -> None:
-        self._console_sinks.append(sink)
-
-    def detach_console(self, sink: Callable[[str], None]) -> None:
-        if sink in self._console_sinks:
-            self._console_sinks.remove(sink)
-
     def _emit(self, text: str) -> None:
-        for sink in list(self._console_sinks):
-            sink(text)
+        self.console.write(text)
 
     def _boot(self, generation: int) -> None:
-        if not self.input_ok():
+        power_on_at = self._power_on_at
+        if power_on_at is None or not self.input_ok():
             return  # brown-out: the board never starts
         log = BOOT_LOG[:6] + HANG_LOG if self.fault == "boot_hang" else BOOT_LOG
         for at, line in log:
-            delay = self._power_on_at + at * self.time_scale - time.monotonic()
+            delay = power_on_at + at * self.time_scale - time.monotonic()
             if delay > 0:
                 time.sleep(delay)
             if generation != self._generation:
@@ -159,14 +151,16 @@ class EmbeddedPC:
             self._emit(line + "\n")
         if self.fault == "boot_hang":
             return
-        delay = self._power_on_at + BOOT_DONE_S * self.time_scale - time.monotonic()
+        delay = power_on_at + BOOT_DONE_S * self.time_scale - time.monotonic()
         if delay > 0:
             time.sleep(delay)
-        if generation == self._generation:
+        with self._lock:
+            if generation != self._generation:
+                return
             self.state = "login"
-            self._emit("\nepc-test login: ")
+        self._emit("\nepc-test login: ")
 
-    def console_input(self, line: str) -> None:
+    def console_line(self, line: str) -> None:
         """Handle one line typed on the console (the console echoes it)."""
         if self.state not in ("login", "shell"):
             return

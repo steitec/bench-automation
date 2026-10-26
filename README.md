@@ -63,17 +63,23 @@ catches real failure modes:
         │
   ┌─────┴──────────── simulator (bench simulate) ──────────────┐
   │ PSU :5025   DMM :5026   MUX :5027   console :5028           │
-  │            all share one EmbeddedPC behavioural model       │
+  │   scpi-sim instruments, wired to one EmbeddedPC device      │
   └─────────────────────────────────────────────────────────────┘
 ```
 
-- The simulated instruments speak **SCPI over raw TCP sockets**, exactly like
-  LAN instruments on port 5025 — including short/long command forms and an
-  error queue (`SYST:ERR?`).
-- The serial console is exposed like a terminal server (`socket://host:port`).
+- The simulated instruments are [scpi-sim](https://github.com/steitec/scpi-sim):
+  **SCPI over raw TCP sockets**, exactly like LAN instruments on port 5025 —
+  short/long command forms, the SCPI path rule, error queue (`SYST:ERR?`) and
+  status registers.
+- The device under test, `EmbeddedPC` in
+  [`src/bench/sim/dut.py`](src/bench/sim/dut.py), is a scpi-sim device: its
+  12 V input is wired to the supply, its four rails to multiplexer channels
+  101–104, its serial console is a TCP port like a terminal server
+  (`socket://host:port`).
 - The device model behaves physically: inrush current, constant-current limit
   pulling the supply voltage down on a short, boot timing, rails that only
-  come up with sufficient input voltage.
+  come up with sufficient input voltage. Closing two rail channels at once is
+  refused (`-221`), as it would short the rails on a real fixture.
 
 ## Running on real hardware
 
