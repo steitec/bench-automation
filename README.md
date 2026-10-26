@@ -14,6 +14,10 @@ temperature, RTC). Every unit gets a pass/fail verdict and a report.
 
 ## Quick start
 
+Needs Python 3.10+ and `git` (the simulated instruments,
+[scpi-sim](https://github.com/steitec/scpi-sim), are installed from GitHub
+until they are on PyPI).
+
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]"
@@ -78,8 +82,10 @@ catches real failure modes:
   (`socket://host:port`).
 - The device model behaves physically: inrush current, constant-current limit
   pulling the supply voltage down on a short, boot timing, rails that only
-  come up with sufficient input voltage. Closing two rail channels at once is
-  refused (`-221`), as it would short the rails on a real fixture.
+  come up with sufficient input voltage. A running board loads the supply
+  like a resistor, so a current limit below its demand pulls the input down
+  (and below 10.8 V the board browns out). Closing two rail channels at once
+  is refused (`-221`), as it would short the rails on a real fixture.
 
 ## Running on real hardware
 

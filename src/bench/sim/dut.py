@@ -71,6 +71,7 @@ class EmbeddedPC(Device):
         self.serial_number = serial_number
         self.state = "off"  # off -> booting -> login -> shell
         self._power_on_at: float | None = None
+        self._undervoltage = False  # input below MIN_INPUT_V when power was applied: never starts
         self._generation = 0
         self._lock = threading.Lock()
         self._rng = random.Random()
@@ -78,13 +79,15 @@ class EmbeddedPC(Device):
     # -- power (called by the bench after every instrument command) ----------
 
     def update(self) -> None:
-        powered = self.input_voltage("vin") > POWER_PRESENT_V
+        vin = self.input_voltage("vin")  # while off the board draws only standby current
+        powered = vin > POWER_PRESENT_V
         with self._lock:
             if powered == (self._power_on_at is not None):
                 return
             self._generation += 1
             generation = self._generation
             if powered:
+                self._undervoltage = vin < MIN_INPUT_V
                 self._power_on_at = time.monotonic()
                 self.state = "booting"
             else:
@@ -104,14 +107,19 @@ class EmbeddedPC(Device):
         return (time.monotonic() - power_on_at) / self.time_scale
 
     def current(self, terminal: str, volts: float) -> float:
-        """Current drawn at the 12 V input (the supply limits it)."""
+        """Current drawn at the 12 V input.
+
+        A running board behaves like a resistive load sized for 12 V, so a
+        current limit below its demand pulls the supply down to
+        12 V x limit / demand -- a deep sag then browns the board out.
+        """
         if volts <= 0:
             return 0.0
         if self.fault == "short":
             return volts / SHORT_OHMS
         power_on_at = self._power_on_at  # read once: update() runs in other threads
-        if volts < MIN_INPUT_V or power_on_at is None:
-            return 0.05
+        if power_on_at is None or self._undervoltage:
+            return 0.05  # standby / under-voltage lockout
         t = self._elapsed(power_on_at)
         if t < INRUSH_END_S:
             amps = 2.2
@@ -119,7 +127,7 @@ class EmbeddedPC(Device):
             amps = 1.3
         else:
             amps = 0.85
-        return amps + self._rng.gauss(0, 0.015)
+        return (amps + self._rng.gauss(0, 0.015)) * volts / 12.0
 
     def input_ok(self) -> bool:
         return self.input_voltage("vin") >= MIN_INPUT_V

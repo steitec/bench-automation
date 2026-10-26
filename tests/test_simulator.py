@@ -87,3 +87,46 @@ def test_driver_reports_instrument_errors(sim):
         psu.configure(voltage=50, current_limit=1)
     psu.close()
     rm.close()
+
+
+def _boots_with_limit(limit):
+    simulator = Simulator(time_scale=0.2, ports=dict.fromkeys(Simulator.DEFAULT_PORTS, 0))
+    try:
+        psu = simulator.bench.psu
+        psu.process(f"VOLT 12;CURR {limit};:OUTP ON")
+        volts = float(psu.process("MEAS:VOLT?"))
+        time.sleep(0.7)
+        return volts, simulator.dut.state
+    finally:
+        simulator.stop()
+
+
+def test_inrush_in_current_limit_sags_like_a_resistive_load():
+    # inrush 2.2 A at 12 V: with a 2.0 A limit the supply sags to ~10.9 V, enough to boot
+    volts, state = _boots_with_limit(2.0)
+    assert volts == pytest.approx(12 * 2.0 / 2.2, abs=0.15)
+    assert state == "login"
+
+
+def test_hard_current_limit_browns_out():
+    volts, state = _boots_with_limit(1.0)
+    assert volts == pytest.approx(12 * 1.0 / 2.2, abs=0.2)
+    assert state != "login"
+
+
+def test_undervoltage_at_power_on_draws_standby_current():
+    simulator = Simulator(time_scale=0.2, ports=dict.fromkeys(Simulator.DEFAULT_PORTS, 0))
+    try:
+        simulator.bench.psu.process("VOLT 10;CURR 3;:OUTP ON")
+        assert float(simulator.bench.psu.process("MEAS:CURR?")) == pytest.approx(0.05)
+    finally:
+        simulator.stop()
+
+
+def test_stop_leaves_the_device_off():
+    simulator = Simulator(time_scale=0.2, ports=dict.fromkeys(Simulator.DEFAULT_PORTS, 0))
+    simulator.start()
+    simulator.bench.psu.process("VOLT 12;CURR 3;:OUTP ON")
+    simulator.stop()
+    simulator.bench.dmm.process("*OPC?")  # any message after stop runs the device update
+    assert simulator.dut.state == "off"

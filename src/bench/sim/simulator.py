@@ -52,8 +52,9 @@ class Simulator:
         return self.resources
 
     def stop(self) -> None:
-        self.dut.power_off()
+        self.bench.psu.process("OUTP OFF")  # the device sees its power go away
         self.bench.stop()
+        self.dut.power_off()
 
     def __enter__(self) -> dict[str, str]:
         return self.start()
