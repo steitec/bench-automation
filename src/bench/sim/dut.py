@@ -124,8 +124,8 @@ class EmbeddedPC(Device):
             return 0.05  # standby / under-voltage lockout
         t = self._elapsed(power_on_at)
         if t < INRUSH_END_S:
-            amps = 2.2
-        elif t < BOOT_DONE_S or self.fault == "boot_hang":
+            return 2.2 * volts / 12.0  # charging the input capacitors: no noise
+        if t < BOOT_DONE_S or self.fault == "boot_hang":
             amps = 1.3
         else:
             amps = 0.85
