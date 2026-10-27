@@ -94,7 +94,7 @@ class EmbeddedPC(Device):
                 self._power_on_at = None
                 self.state = "off"
         if powered:
-            threading.Thread(target=self._boot, args=(generation,), daemon=True).start()
+            threading.Thread(target=self._boot, args=(generation, self._power_on_at), daemon=True).start()
 
     def power_off(self) -> None:
         """Forget the power state (stops a running boot), e.g. when the simulator stops."""
@@ -142,12 +142,13 @@ class EmbeddedPC(Device):
 
     # -- serial console ----------------------------------------------------
 
-    def _emit(self, text: str) -> None:
-        self.console.write(text)
+    def _emit(self, text: str, generation: int) -> None:
+        """Write to the console unless the power was cycled since ``generation``."""
+        if generation == self._generation:
+            self.console.write(text)
 
-    def _boot(self, generation: int) -> None:
-        power_on_at = self._power_on_at
-        if power_on_at is None or not self.input_ok():
+    def _boot(self, generation: int, power_on_at: float) -> None:
+        if not self.input_ok():
             return  # brown-out: the board never starts
         log = BOOT_LOG[:6] + HANG_LOG if self.fault == "boot_hang" else BOOT_LOG
         for at, line in log:
@@ -156,7 +157,7 @@ class EmbeddedPC(Device):
                 time.sleep(delay)
             if generation != self._generation:
                 return
-            self._emit(line + "\n")
+            self._emit(line + "\n", generation)
         if self.fault == "boot_hang":
             return
         delay = power_on_at + BOOT_DONE_S * self.time_scale - time.monotonic()
@@ -166,22 +167,23 @@ class EmbeddedPC(Device):
             if generation != self._generation:
                 return
             self.state = "login"
-        self._emit("\nepc-test login: ")
+        self._emit("\nepc-test login: ", generation)
 
     def console_line(self, line: str) -> None:
         """Handle one line typed on the console (the console echoes it)."""
-        if self.state not in ("login", "shell"):
-            return
-        self._emit(line + "\n")
-        if self.state == "login":
-            if line == "root":
+        with self._lock:  # a power-off in between must win
+            state, generation = self.state, self._generation
+            if state == "login" and line == "root":
                 self.state = "shell"
-                self._emit("Last login: on ttyS0\n# ")
-            else:
-                self._emit("Login incorrect\n\nepc-test login: ")
+        if state == "login":
+            reply = "Last login: on ttyS0\n# " if line == "root" else "Login incorrect\n\nepc-test login: "
+        elif state == "shell":
+            output = self._shell(line.strip())
+            reply = (output + "\n" if output else "") + "# "
+        else:
             return
-        output = self._shell(line.strip())
-        self._emit((output + "\n" if output else "") + "# ")
+        self._emit(line + "\n", generation)
+        self._emit(reply, generation)
 
     def _shell(self, cmd: str) -> str:
         if not cmd:

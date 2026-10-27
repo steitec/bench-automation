@@ -63,11 +63,13 @@ def test_rail_through_the_fixture(sim):
 
 def test_current_limit_pulls_voltage_down():
     simulator = Simulator(fault="short", ports=dict.fromkeys(Simulator.DEFAULT_PORTS, 0))
-    psu = simulator.bench.psu
-    psu.process("VOLT 12;CURR 3;:OUTP ON")
-    assert float(psu.process("MEAS:CURR?")) == pytest.approx(3.0)
-    assert float(psu.process("MEAS:VOLT?")) == pytest.approx(8.0, rel=1e-3)
-    psu.process("OUTP OFF")
+    try:
+        psu = simulator.bench.psu
+        psu.process("VOLT 12;CURR 3;:OUTP ON")
+        assert float(psu.process("MEAS:CURR?")) == pytest.approx(3.0)
+        assert float(psu.process("MEAS:VOLT?")) == pytest.approx(8.0, rel=1e-3)
+    finally:
+        simulator.stop()
 
 
 def test_inrush_then_boot_current(sim):
@@ -130,3 +132,20 @@ def test_stop_leaves_the_device_off():
     simulator.stop()
     simulator.bench.dmm.process("*OPC?")  # any message after stop runs the device update
     assert simulator.dut.state == "off"
+
+
+def test_power_off_while_logging_in_leaves_the_device_off():
+    dut = EmbeddedPC()
+    dut.state = "login"
+    after_off = []
+
+    def pull_the_plug(text):  # the echo of the typed line: power goes away right then
+        if dut.state == "off":
+            after_off.append(text)
+        elif text == "root\n":
+            dut.power_off()
+
+    dut.console.attach(pull_the_plug)
+    dut.console_line("root")
+    assert dut.state == "off"
+    assert after_off == []
