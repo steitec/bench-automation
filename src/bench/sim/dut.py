@@ -38,6 +38,7 @@ POWER_PRESENT_V = 0.5    # any input voltage above this counts as "power applied
 INRUSH_END_S = 0.3
 BOOT_DONE_S = 2.5
 MIN_INPUT_V = 10.8
+NOISE_TICK_S = 0.01  # real seconds the load noise stays the same (one supply measurement)
 
 BOOT_LOG = [
     (0.4, "AMI BIOS v5.27 (C) 2024 BenchSim Embedded"),
@@ -75,6 +76,7 @@ class EmbeddedPC(Device):
         self._generation = 0
         self._lock = threading.Lock()
         self._rng = random.Random()
+        self._noise = (0.0, -NOISE_TICK_S)  # (amps, time.monotonic() when drawn)
 
     # -- power (called by the bench after every instrument command) ----------
 
@@ -127,7 +129,17 @@ class EmbeddedPC(Device):
             amps = 1.3
         else:
             amps = 0.85
-        return (amps + self._rng.gauss(0, 0.015)) * volts / 12.0
+        return (amps + self._load_noise()) * volts / 12.0
+
+    def _load_noise(self) -> float:
+        """Noise on the input current, the same for one tick: the supply's
+        bisection must see a current that rises with the voltage."""
+        noise, drawn_at = self._noise
+        now = time.monotonic()
+        if now - drawn_at >= NOISE_TICK_S:
+            noise = self._rng.gauss(0, 0.015)
+            self._noise = (noise, now)
+        return noise
 
     def input_ok(self) -> bool:
         return self.input_voltage("vin") >= MIN_INPUT_V

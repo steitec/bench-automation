@@ -105,8 +105,9 @@ def _boots_with_limit(limit):
 
 def test_inrush_in_current_limit_sags_like_a_resistive_load():
     # inrush 2.2 A at 12 V: with a 2.0 A limit the supply sags to ~10.9 V, enough to boot
+    # (the board's 15 mA current noise moves that point by ~0.075 V: 4 sigma = 0.3 V)
     volts, state = _boots_with_limit(2.0)
-    assert volts == pytest.approx(12 * 2.0 / 2.2, abs=0.15)
+    assert volts == pytest.approx(12 * 2.0 / 2.2, abs=0.3)
     assert state == "login"
 
 
@@ -149,3 +150,14 @@ def test_power_off_while_logging_in_leaves_the_device_off():
     dut.console_line("root")
     assert dut.state == "off"
     assert after_off == []
+
+
+def test_input_current_rises_with_voltage_within_one_measurement():
+    # The supply finds its current-limit point by bisection over the board's
+    # current; fresh noise on every call made that curve jump, and the search
+    # stopped on a wrong step now and then (11.0625 V instead of ~10.9 V).
+    board = EmbeddedPC(time_scale=1000.0)  # stays in inrush for the whole test
+    board._power_on_at = time.monotonic()
+    for _ in range(200):
+        amps = [board.current("vin", volts / 10) for volts in range(100, 121)]
+        assert amps == sorted(amps)
