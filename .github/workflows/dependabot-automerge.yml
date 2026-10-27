@@ -1,6 +1,8 @@
 # Auto-merge Dependabot PRs once the required CI checks pass.
-# Patch and minor updates merge on their own; major updates of packages stay
-# open for a manual review. GitHub Actions updates always merge.
+# Only updates that are explicitly patch or minor merge on their own, plus all
+# GitHub Actions updates. Major updates stay open for a manual review, and so
+# do PRs whose update type is unknown (fetch-metadata reports none when one PR
+# bumps several packages).
 name: Dependabot auto-merge
 
 on: pull_request
@@ -16,7 +18,10 @@ jobs:
     steps:
       - id: meta
         uses: dependabot/fetch-metadata@v2
-      - if: steps.meta.outputs.update-type != 'version-update:semver-major' || steps.meta.outputs.package-ecosystem == 'github_actions'
+      - if: >-
+          steps.meta.outputs.package-ecosystem == 'github_actions' ||
+          steps.meta.outputs.update-type == 'version-update:semver-patch' ||
+          steps.meta.outputs.update-type == 'version-update:semver-minor'
         run: gh pr merge --auto --squash "$PR_URL"
         env:
           PR_URL: ${{ github.event.pull_request.html_url }}
