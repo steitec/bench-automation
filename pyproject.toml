@@ -15,8 +15,7 @@ dependencies = [
     "pyvisa-py>=0.7",
     "pyserial>=3.5",
     "pyyaml>=6.0",
-    # until scpi-sim is on PyPI: a fixed commit on GitHub (then "scpi-sim>=0.3")
-    "scpi-sim @ git+https://github.com/steitec/scpi-sim@1069675e5cac81bdea0b1a4a19d5e9636c8552d1",
+    "scpi-sim>=0.3,<0.4",
 ]
 
 [project.optional-dependencies]

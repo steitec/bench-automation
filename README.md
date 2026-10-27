@@ -14,9 +14,8 @@ temperature, RTC). Every unit gets a pass/fail verdict and a report.
 
 ## Quick start
 
-Needs Python 3.10+ and `git` (the simulated instruments,
-[scpi-sim](https://github.com/steitec/scpi-sim), are installed from GitHub
-until they are on PyPI).
+Needs Python 3.10+. The simulated instruments,
+[scpi-sim](https://github.com/steitec/scpi-sim), come from PyPI.
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
