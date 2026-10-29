@@ -1,5 +1,9 @@
 # bench-automation
 
+[![CI](https://github.com/steitec/bench-automation/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/steitec/bench-automation/actions/workflows/ci.yml)
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://github.com/steitec/bench-automation/blob/main/pyproject.toml)
+[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/steitec/bench-automation/blob/main/LICENSE)
+
 An end-of-line test station for a 12 V embedded PC, written in Python —
 complete with simulated instruments, so you can run the whole thing without a
 single piece of hardware.
