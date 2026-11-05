@@ -15,12 +15,14 @@ import threading
 import time
 from datetime import datetime
 
-from scpi_sim import Device
+from scpi_sim import Device, Transient
 
 FAULTS = {
     "none": "healthy device",
     "short": "short circuit on the 12 V input",
     "rail_1v05": "1.05 V core rail missing",
+    "inrush_spike": "4 A inrush spike of 2 ms (input capacitor too large)",
+    "rail_slow": "3.3 V rail ramps up too slowly (soft-start capacitor too large)",
     "boot_hang": "boot hangs in the kernel (SATA reset loop)",
     "sata_slow": "SATA link falls back to 3.0 Gbps (marginal signal path)",
     "can_missing": "CAN controller not detected (no driver message at boot)",
@@ -40,6 +42,11 @@ POWER_PRESENT_V = 0.5    # any input voltage above this counts as "power applied
 INRUSH_END_S = 0.3
 BOOT_DONE_S = 2.5
 MIN_INPUT_V = 10.8
+VOLTS_PER_AMP = 0.1  # the current probe on vin
+SPIKE_S = 0.002      # shorter than the time between two measurements of the supply
+RAIL_START_S = 0.05
+RAIL_RAMP_S = 0.02
+SLOW_RAIL_RAMP_S = 0.2
 NOISE_TICK_S = 0.01  # real seconds the load noise stays the same (one supply measurement)
 
 BOOT_LOG = [
@@ -82,7 +89,7 @@ def boot_log(fault: str) -> list[tuple[float, str]]:
 
 
 class EmbeddedPC(Device):
-    terminals = {"vin": "input", **{rail: "output" for rail in RAILS}}
+    terminals = {"vin": "input", "isense": "output", **{rail: "output" for rail in RAILS}}
 
     def __init__(self, fault: str = "none", time_scale: float = 1.0,
                  serial_number: str = "EPC-24-00137"):
@@ -99,6 +106,7 @@ class EmbeddedPC(Device):
         self._lock = threading.Lock()
         self._rng = random.Random()
         self._noise = (0.0, -NOISE_TICK_S)  # (amps, time.monotonic() when drawn)
+        self._waveforms: dict[str, Transient] = {}  # what a scope sees, after the first power-on
 
     # -- power (called by the bench after every instrument command) ----------
 
@@ -114,7 +122,9 @@ class EmbeddedPC(Device):
                 self._undervoltage = vin < MIN_INPUT_V
                 self._power_on_at = time.monotonic()
                 self.state = "booting"
+                self._waveforms = self._power_on_waveforms(self._power_on_at, vin)
             else:
+                self._waveforms = self._power_off_waveforms(time.monotonic())
                 self._power_on_at = None
                 self.state = "off"
         if powered:
@@ -124,8 +134,36 @@ class EmbeddedPC(Device):
         """Forget the power state (stops a running boot), e.g. when the simulator stops."""
         with self._lock:
             self._generation += 1
+            self._waveforms = {}
             self._power_on_at = None
             self.state = "off"
+
+    def _power_on_waveforms(self, now: float, vin: float) -> dict[str, Transient]:
+        """The input current and the 3.3 V rail, as they run in ``current()`` and the boot."""
+        scale = self.time_scale
+        if self.fault == "short":
+            amps = [(0, 0), (0, 4.5)]
+        elif vin < MIN_INPUT_V:
+            amps = [(0, 0), (0, 0.05)]
+        else:
+            amps = [(0, 0), (0, 2.2)]
+            if self.fault == "inrush_spike":
+                amps = [(0, 0), (0, 4.0), (SPIKE_S, 4.0), (SPIKE_S, 2.2)]
+            amps += [(INRUSH_END_S, 2.2), (INRUSH_END_S, 1.3)]
+            if self.fault != "boot_hang":
+                amps += [(BOOT_DONE_S, 1.3), (BOOT_DONE_S, 0.85)]
+        ramp = SLOW_RAIL_RAMP_S if self.fault == "rail_slow" else RAIL_RAMP_S
+        rail = [(0, 0), (RAIL_START_S, 0), (RAIL_START_S + ramp, RAILS["3V3"])]
+        if vin < MIN_INPUT_V or self.fault == "short":
+            rail = [(0, 0)]
+        return {"isense": Transient(now, [(t * scale, a * VOLTS_PER_AMP) for t, a in amps]),
+                "3V3": Transient(now, [(t * scale, v) for t, v in rail])}
+
+    def _power_off_waveforms(self, now: float) -> dict[str, Transient]:
+        return {"isense": Transient(now, [(0, 0)]), "3V3": Transient(now, [(0, 0)])}
+
+    def waveform(self, terminal: str) -> Transient | None:
+        return self._waveforms.get(terminal)
 
     def _elapsed(self, power_on_at: float) -> float:
         return (time.monotonic() - power_on_at) / self.time_scale
@@ -169,6 +207,8 @@ class EmbeddedPC(Device):
     # -- rails, measured through the fixture -----------------------------------
 
     def voltage(self, terminal: str) -> float:
+        if terminal == "isense":
+            return self.current("vin", 12.0) * VOLTS_PER_AMP
         if (self._power_on_at is None or not self.input_ok()
                 or (terminal == "1V05" and self.fault == "rail_1v05")):
             return abs(self._rng.gauss(0.02, 0.005))

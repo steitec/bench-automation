@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bench-automation"
-version = "0.2.0"
+version = "0.3.0"
 description = "End-of-line test station for an embedded PC, with simulated SCPI instruments"
 readme = "README.md"
 license = "MIT"
@@ -15,7 +15,7 @@ dependencies = [
     "pyvisa-py>=0.7",
     "pyserial>=3.5",
     "pyyaml>=6.0",
-    "scpi-sim>=0.3,<0.7",
+    "scpi-sim>=0.7,<0.8",
     "boot-log-diff>=0.3,<0.4",
 ]
 

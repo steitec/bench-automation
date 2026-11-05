@@ -15,11 +15,11 @@ single piece of hardware.
 
 It does what a production test does: power the board up through a lab supply,
 check inrush and idle current, measure every supply rail through a relay
-multiplexer and a DMM, watch the serial console during boot and compare it with
-a golden log, log in, and run on-device checks (identity, RAM, SSD health, USB ports, Ethernet link, CPU
+multiplexer and a DMM, capture the power-on with an oscilloscope, watch the serial
+console during boot and compare it with a golden log, log in, and run on-device checks (identity, RAM, SSD health, USB ports, Ethernet link, CPU
 temperature, RTC). Every unit gets a pass/fail verdict and a report.
 
-![HTML test report for a unit whose CAN controller is no longer detected](docs/report-screenshot.png)
+![HTML test report for a unit with an inrush spike that only the oscilloscope catches](docs/report-screenshot.png)
 
 ## Quick start
 
@@ -57,6 +57,8 @@ catches real failure modes:
 | `--fault` | Defect | Caught by |
 |---|---|---|
 | `short` | short circuit on the 12 V input | Power on — supply hits current limit, power is removed, rest skipped |
+| `inrush_spike` | 2 ms inrush spike of 4 A | Power on — only the scope: polling the supply misses it |
+| `rail_slow` | 3.3 V rail ramps up too slowly | Power on — only the scope |
 | `rail_1v05` | 1.05 V core rail missing | Supply rails |
 | `boot_hang` | kernel hangs in a SATA reset loop | Boot — timeout, last console line in the report; Boot log — diagnosis `sata-link`, `boot-incomplete` |
 | `sata_slow` | SATA link falls back to 3.0 Gbps, board otherwise fine | Boot log only — diagnosis `sata-link` |
@@ -65,6 +67,25 @@ catches real failure modes:
 | `smart` | SSD with reallocated/pending sectors | Storage |
 | `no_link` | no Ethernet link | Ethernet |
 | `overtemp` | CPU running hot | Temperature |
+
+## Power-on capture
+
+Polling a supply's current every few milliseconds misses what happens in
+between. So the scope is armed before the supply switches on: channel 1 sees the
+input current through a current probe, channel 2 a rail. The step checks the peak
+current, the rail's level and its ramp time, and the report shows both curves.
+
+```yaml
+scope:                       # leave the section out to run without a scope
+  time_per_div: 0.05
+  trigger_amps: 0.5
+  max_rail_ramp_s: 0.05      # 10 % to 90 %
+  current: {channel: 1, volts_per_amp: 0.1, volts_per_div: 0.1, center_volts: 0.3}
+  rail: {name: "3V3", channel: 2, volts_per_div: 1, center_volts: 2, min_volts: 3.0}
+```
+
+The commands are those of Keysight InfiniiVision scopes. Other models need their
+own driver in `drivers.py`. None of this has run against a real scope yet.
 
 ## Boot log check
 
@@ -98,7 +119,7 @@ a known-good unit, from power-on up to the login prompt.
             └── SerialConsole                          (pyserial)
         │
   ┌─────┴──────────── simulator (bench simulate) ──────────────┐
-  │ PSU :5025   DMM :5026   MUX :5027   console :5028           │
+  │ PSU :5025  DMM :5026  MUX :5027  console :5028  scope :5029 │
   │   scpi-sim instruments, wired to one EmbeddedPC device      │
   └─────────────────────────────────────────────────────────────┘
 ```

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from .station import TestRun
 
+_TRACE_COLORS = ("#c2410c", "#2563eb")
 _STATUS_COLORS = {"PASS": "#1a7f37", "FAIL": "#cf222e", "ERROR": "#9a6700", "SKIP": "#6e7781"}
 
 
@@ -88,6 +89,37 @@ def _boot_diagnosis(run: TestRun) -> str:
     return "".join(out)
 
 
+def _scope_plot(run: TestRun) -> str:
+    """The power-on capture as a small inline chart, one panel per trace."""
+    if not run.scope_traces:
+        return ""
+    width, height, left, panels = 900, 130, 60, []
+    for index, (name, trace) in enumerate(run.scope_traces.items()):
+        times, values = trace["times"], trace["values"]
+        low, high = min(min(values), 0.0), max(max(values), 1e-9)
+        span = times[-1] - times[0] or 1.0
+
+        def x(t: float) -> float:
+            return left + (width - left - 8) * (t - times[0]) / span
+
+        def y(v: float) -> float:
+            return height - 8 - (height - 20) * (v - low) / (high - low)
+        points = " ".join(f"{x(t):.1f},{y(v):.1f}" for t, v in zip(times, values))
+        panels.append(
+            f'<figure><figcaption>{html.escape(name)}</figcaption>'
+            f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(name)} after power-on">'
+            f'<line x1="{left}" y1="{y(0):.1f}" x2="{width - 8}" y2="{y(0):.1f}" stroke="var(--line)"/>'
+            f'<line x1="{x(0):.1f}" y1="8" x2="{x(0):.1f}" y2="{height - 8}" stroke="var(--line)" stroke-dasharray="3 3"/>'
+            f'<text x="{left - 6}" y="16" text-anchor="end" fill="var(--muted)" font-size="12">'
+            f'{high:.3g} {trace["unit"]}</text>'
+            f'<text x="{left - 6}" y="{y(0):.1f}" text-anchor="end" fill="var(--muted)" font-size="12">0</text>'
+            f'<polyline points="{points}" fill="none" stroke="{_TRACE_COLORS[index % 2]}" stroke-width="1.5"/>'
+            f'</svg></figure>')
+    span_ms = (times[-1] - times[0]) * 1e3
+    return (f'<h2>Power-on capture</h2>{"".join(panels)}'
+            f'<p class="muted">{span_ms:.0f} ms across; the dashed line is the trigger.</p>')
+
+
 def _html(run: TestRun) -> str:
     rows = []
     for step in run.steps:
@@ -103,7 +135,7 @@ def _html(run: TestRun) -> str:
                 f'<td class="num">{_limits(m.low, m.high)}</td>'
                 f'<td>{_gauge(float(m.value), m.low, m.high) if numeric else ""}</td>'  # type: ignore[arg-type]
                 f'<td>{_badge("PASS" if m.passed else "FAIL")}</td></tr>')
-    diagnosis = _boot_diagnosis(run)
+    diagnosis = _scope_plot(run) + _boot_diagnosis(run)
     instruments = "".join(f"<li><code>{html.escape(k)}</code> {html.escape(v)}</li>"
                           for k, v in run.instruments.items())
     return f"""<!doctype html>
@@ -126,6 +158,9 @@ td {{ border-bottom:1px solid var(--line); padding:6px 8px; vertical-align:middl
 tr.step td {{ padding-top:14px; }}
 .indent {{ padding-left:24px; }}
 .num {{ font-variant-numeric:tabular-nums; white-space:nowrap; }}
+figure {{ margin:0 0 .5rem; }}
+figcaption {{ font-size:13px; color:var(--muted); }}
+svg[viewBox] {{ width:100%; height:auto; display:block; }}
 pre {{ background:rgba(127,127,127,.1); padding:12px; overflow-x:auto; font-size:12.5px; }}
 </style></head><body>
 <h1>End-of-line test {_badge(run.status).replace('class="badge"', 'class="badge verdict"')}</h1>

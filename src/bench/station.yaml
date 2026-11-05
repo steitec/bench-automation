@@ -10,6 +10,7 @@ resources:
   dmm: "TCPIP0::127.0.0.1::5026::SOCKET"
   mux: "TCPIP0::127.0.0.1::5027::SOCKET"
   console: "socket://127.0.0.1:5028"
+  scope: "TCPIP0::127.0.0.1::5029::SOCKET"
 console_baudrate: 115200
 
 power:
@@ -37,6 +38,15 @@ boot:
   mask: []                   # e.g. 'epc-[0-9a-f]+' for host names
   ignore: []
   rules: []                  # own known faults, TOML files (see boot-log-diff)
+
+# Power-on seen by an oscilloscope, armed before the supply switches on. Leave this
+# section out to run without a scope. The commands are those of Keysight InfiniiVision scopes.
+scope:
+  time_per_div: 0.05
+  trigger_amps: 0.5
+  max_rail_ramp_s: 0.05      # 10 % to 90 %
+  current: {channel: 1, volts_per_amp: 0.1, volts_per_div: 0.1, center_volts: 0.3}
+  rail: {name: "3V3", channel: 2, volts_per_div: 1, center_volts: 2, min_volts: 3.0}
 
 device:
   serial_pattern: '^EPC-\d{2}-\d{5}$'

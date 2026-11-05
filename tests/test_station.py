@@ -16,6 +16,8 @@ FAULT_CAUGHT_BY = {
     "no_link": "Ethernet",
     "overtemp": "Temperature",
     # Only the comparison with the golden log sees these two.
+    "inrush_spike": "Power on",  # too short for polling the supply: only the scope sees it
+    "rail_slow": "Power on",
     "sata_slow": "Boot log",
     "can_missing": "Boot log",
 }
@@ -24,6 +26,8 @@ FAULT_CAUGHT_BY = {
 def run_against(fault: str):
     config = load_config(_default_config())
     config["boot"]["timeout_s"] = 2  # the device runs 5x faster below
+    config["scope"]["time_per_div"] *= 0.2
+    config["scope"]["max_rail_ramp_s"] *= 0.2
     with Simulator(fault=fault, time_scale=0.2,
                    ports=dict.fromkeys(Simulator.DEFAULT_PORTS, 0)) as resources:
         config["resources"] = resources
@@ -89,6 +93,58 @@ def test_missing_driver_points_at_the_golden_line():
 
 def test_short_skips_the_boot_log():
     assert statuses(run_against("short"))["Boot log"] == "SKIP"
+
+
+def power_on_values(run):
+    step = next(step for step in run.steps if step.name == "Power on")
+    return {m.name: m for m in step.measurements}
+
+
+def test_scope_measures_the_power_on():
+    values = power_on_values(run_against("none"))
+    assert values["Inrush peak (scope)"].value == pytest.approx(2.2, abs=0.15)
+    assert values["Inrush peak (scope)"].passed
+    assert values["Rail 3V3 ramp"].value == pytest.approx(0.2 * 0.016, rel=0.3)
+    assert values["Rail 3V3 ramp"].passed
+
+
+def test_spike_is_missed_by_polling_but_not_by_the_scope():
+    values = power_on_values(run_against("inrush_spike"))
+    assert values["Inrush peak"].passed
+    assert not values["Inrush peak (scope)"].passed
+    assert values["Inrush peak (scope)"].value == pytest.approx(4, abs=0.2)
+
+
+def test_slow_rail_is_seen():
+    values = power_on_values(run_against("rail_slow"))
+    assert not values["Rail 3V3 ramp"].passed
+    assert values["Inrush peak (scope)"].passed
+
+
+def test_rail_that_never_comes_up_fails_on_its_level():
+    config = load_config(_default_config())
+    config["boot"]["timeout_s"] = 2
+    config["scope"]["time_per_div"] *= 0.2
+    config["scope"]["rail"]["channel"] = 3  # nothing is wired there
+    with Simulator(time_scale=0.2, ports=dict.fromkeys(Simulator.DEFAULT_PORTS, 0)) as resources:
+        config["resources"] = resources
+        run = EndOfLineTest(config).run()
+    values = power_on_values(run)
+    assert not values["Rail 3V3 level"].passed
+    assert "Rail 3V3 ramp" not in values
+    assert statuses(run)["Power on"] == "FAIL"
+
+
+def test_no_scope_in_the_config_means_no_scope_values():
+    config = load_config(_default_config())
+    del config["scope"]
+    config["boot"]["timeout_s"] = 2
+    with Simulator(time_scale=0.2, ports=dict.fromkeys(Simulator.DEFAULT_PORTS, 0)) as resources:
+        config["resources"] = resources
+        run = EndOfLineTest(config).run()
+    assert run.status == "PASS"
+    assert "Inrush peak (scope)" not in power_on_values(run)
+    assert run.scope_traces == {}
 
 
 def test_no_golden_log_means_no_step():
@@ -161,3 +217,16 @@ def test_reports_show_the_diagnosis(tmp_path):
     html = (folder / "report.html").read_text()
     assert "Boot log diagnosis" in html
     assert "CAN interface no longer detected" in html
+
+
+def test_reports_show_the_power_on_capture(tmp_path):
+    run = run_against("none")
+    folder = write_reports(run, tmp_path)
+    traces = json.loads((folder / "result.json").read_text())["scope_traces"]
+    assert set(traces) == {"Input current", "Rail 3V3"}
+    assert traces["Input current"]["unit"] == "A"
+    assert max(traces["Input current"]["values"]) == pytest.approx(2.2, abs=0.15)
+    assert len(traces["Rail 3V3"]["times"]) <= 400
+    html = (folder / "report.html").read_text()
+    assert "Power-on capture" in html
+    assert "<polyline" in html

@@ -4,6 +4,8 @@
     mux 101..104 ── dut.5V0 / 3V3 / 1V8 / 1V05
     mux common ──── dmm input
     dut console ─── TCP port (like a terminal server)
+    scope ch1 ───── dut.isense, a 100 mV/A current probe on vin
+    scope ch2 ───── dut.3V3
 """
 
 from __future__ import annotations
@@ -16,7 +18,7 @@ from .dut import FAULTS, MUX_WIRING
 class Simulator:
     """Runs the simulated instruments and the device under test."""
 
-    DEFAULT_PORTS = {"psu": 5025, "dmm": 5026, "mux": 5027, "console": 5028}
+    DEFAULT_PORTS = {"psu": 5025, "dmm": 5026, "mux": 5027, "console": 5028, "scope": 5029}
 
     def __init__(self, fault: str = "none", time_scale: float = 1.0,
                  host: str = "127.0.0.1", ports: dict[str, int] | None = None):
@@ -29,6 +31,7 @@ class Simulator:
                 "psu": {"type": "psu", "port": self.ports["psu"], "max_amps": 5},
                 "dmm": {"type": "dmm", "port": self.ports["dmm"]},
                 "mux": {"type": "mux", "port": self.ports["mux"]},
+                "scope": {"type": "scope", "port": self.ports["scope"]},
             },
             "devices": {
                 "dut": {"class": "bench.sim.dut:EmbeddedPC",
@@ -39,6 +42,8 @@ class Simulator:
                 "psu.ch1 -> dut.vin",
                 *(f"mux.{channel} -> dut.{rail}" for channel, rail in MUX_WIRING.items()),
                 "mux.common -> dmm.input",
+                "scope.ch1 -> dut.isense",
+                "scope.ch2 -> dut.3V3",
             ],
         })
         self.dut = self.bench.devices["dut"]
@@ -47,7 +52,7 @@ class Simulator:
     def start(self) -> dict[str, str]:
         """Start all servers and return the resource strings to reach them."""
         self.bench.start(host=self.host)
-        self.resources = {name: self.bench.resource(name) for name in ("psu", "dmm", "mux")}
+        self.resources = {name: self.bench.resource(name) for name in ("psu", "dmm", "mux", "scope")}
         self.resources["console"] = self.bench.console_url("dut")
         return self.resources
 
