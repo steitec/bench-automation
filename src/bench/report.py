@@ -71,6 +71,23 @@ def _limits(low: object, high: object) -> str:
     return "—"
 
 
+def _boot_diagnosis(run: TestRun) -> str:
+    """The known faults and the diff from the comparison with the golden log."""
+    if not run.boot_faults and (not run.boot_diff or "no deviations" in run.boot_diff):
+        return ""
+    out = ["<h2>Boot log diagnosis</h2>"]
+    for fault in run.boot_faults:
+        lines = "\n".join(fault["lines"])
+        where = "in the golden log, not printed by this board" if fault["log"] == "golden" else "printed by this board"
+        out.append(f'<p><strong>{html.escape(fault["title"])}</strong> '
+                   f'<span class="muted">{html.escape(fault["id"])} · {html.escape(fault["severity"])}</span><br>'
+                   f'{html.escape(fault["diagnosis"])}</p>'
+                   f'<pre>{html.escape(lines)}</pre><p class="muted">{where}</p>')
+    out.append(f"<details><summary>Comparison with the golden log</summary>"
+               f"<pre>{html.escape(run.boot_diff)}</pre></details>")
+    return "".join(out)
+
+
 def _html(run: TestRun) -> str:
     rows = []
     for step in run.steps:
@@ -86,6 +103,7 @@ def _html(run: TestRun) -> str:
                 f'<td class="num">{_limits(m.low, m.high)}</td>'
                 f'<td>{_gauge(float(m.value), m.low, m.high) if numeric else ""}</td>'  # type: ignore[arg-type]
                 f'<td>{_badge("PASS" if m.passed else "FAIL")}</td></tr>')
+    diagnosis = _boot_diagnosis(run)
     instruments = "".join(f"<li><code>{html.escape(k)}</code> {html.escape(v)}</li>"
                           for k, v in run.instruments.items())
     return f"""<!doctype html>
@@ -114,6 +132,7 @@ pre {{ background:rgba(127,127,127,.1); padding:12px; overflow-x:auto; font-size
 <p class="muted">Serial <strong>{html.escape(run.serial_number)}</strong> · station
 {html.escape(run.station)} · {run.started:%Y-%m-%d %H:%M:%S} · {run.duration_s:.1f} s</p>
 <table>{''.join(rows)}</table>
+{diagnosis}
 <h2>Instruments</h2><ul>{instruments}</ul>
 <details><summary>Console log</summary><pre>{html.escape(run.console_log)}</pre></details>
 </body></html>

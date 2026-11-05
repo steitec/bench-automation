@@ -22,6 +22,8 @@ FAULTS = {
     "short": "short circuit on the 12 V input",
     "rail_1v05": "1.05 V core rail missing",
     "boot_hang": "boot hangs in the kernel (SATA reset loop)",
+    "sata_slow": "SATA link falls back to 3.0 Gbps (marginal signal path)",
+    "can_missing": "CAN controller not detected (no driver message at boot)",
     "usb_port": "one USB port dead",
     "smart": "SSD with reallocated and pending sectors",
     "no_link": "no Ethernet link",
@@ -50,6 +52,7 @@ BOOT_LOG = [
     (1.6, "[    0.000000] Linux version 6.6.0-epc (build@ci) #1 SMP PREEMPT_DYNAMIC"),
     (1.9, "[    1.204511] ata1: SATA link up 6.0 Gbps (SStatus 133 SControl 300)"),
     (2.1, "[    1.873320] e1000e 0000:00:1f.6 eth0: registered PHC clock"),
+    (2.2, "[    2.201733] mcp251x spi0.0 can0: MCP2515 successfully initialized"),
     (2.3, "[    2.410552] systemd[1]: Reached target multi-user.target"),
 ]
 HANG_LOG = [
@@ -57,6 +60,25 @@ HANG_LOG = [
     (2.6, "[    6.311045] ata1: COMRESET failed (errno=-16)"),
     (3.3, "[   11.418871] ata1: limiting SATA link speed to 3.0 Gbps"),
 ]
+SATA_LINK_UP = "ata1: SATA link up 6.0 Gbps"
+SATA_SLOW_LOG = [
+    "[    1.204511] ata1: limiting SATA link speed to 3.0 Gbps",
+    "[    1.204511] ata1: SATA link up 3.0 Gbps (SStatus 123 SControl 320)",
+]
+
+
+def boot_log(fault: str) -> list[tuple[float, str]]:
+    """The console output of a boot with this fault, as (device seconds, line)."""
+    if fault == "boot_hang":
+        return BOOT_LOG[:7] + HANG_LOG
+    if fault == "can_missing":
+        return [entry for entry in BOOT_LOG if "can0" not in entry[1]]
+    if fault == "sata_slow":
+        log = []
+        for at, line in BOOT_LOG:
+            log += [(at, text) for text in SATA_SLOW_LOG] if SATA_LINK_UP in line else [(at, line)]
+        return log
+    return BOOT_LOG
 
 
 class EmbeddedPC(Device):
@@ -162,8 +184,7 @@ class EmbeddedPC(Device):
     def _boot(self, generation: int, power_on_at: float) -> None:
         if not self.input_ok():
             return  # brown-out: the board never starts
-        log = BOOT_LOG[:6] + HANG_LOG if self.fault == "boot_hang" else BOOT_LOG
-        for at, line in log:
+        for at, line in boot_log(self.fault):
             delay = power_on_at + at * self.time_scale - time.monotonic()
             if delay > 0:
                 time.sleep(delay)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import signal
 import sys
 from importlib import resources as pkg_resources
@@ -70,14 +71,19 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     config = load_config(args.config)
+    try:
+        station = EndOfLineTest(config, on_step=_print_step)
+    except (OSError, ValueError, re.error) as exc:
+        print(f"bench: error: {exc}", file=sys.stderr)
+        return 2
     if args.cmd == "demo":
         with Simulator(fault=args.fault, ports=dict.fromkeys(Simulator.DEFAULT_PORTS, 0)) as res:
             config["resources"] = res
             print(f"  Simulated device: {FAULTS[args.fault]}\n")
-            run = EndOfLineTest(config, on_step=_print_step).run()
+            run = station.run()
         return _finish(run, args.out)
 
-    run = EndOfLineTest(config, on_step=_print_step).run(serial_number=args.serial)
+    run = station.run(serial_number=args.serial)
     return _finish(run, args.out)
 
 

@@ -15,11 +15,11 @@ single piece of hardware.
 
 It does what a production test does: power the board up through a lab supply,
 check inrush and idle current, measure every supply rail through a relay
-multiplexer and a DMM, watch the serial console during boot, log in, and run
-on-device checks (identity, RAM, SSD health, USB ports, Ethernet link, CPU
+multiplexer and a DMM, watch the serial console during boot and compare it with
+a golden log, log in, and run on-device checks (identity, RAM, SSD health, USB ports, Ethernet link, CPU
 temperature, RTC). Every unit gets a pass/fail verdict and a report.
 
-![HTML test report for a unit with a failing SSD](docs/report-screenshot.png)
+![HTML test report for a unit whose CAN controller is no longer detected](docs/report-screenshot.png)
 
 ## Quick start
 
@@ -38,6 +38,7 @@ bench demo --fault smart   # SSD with bad sectors -> FAIL in "Storage"
   [PASS ] Power on           Inrush peak 2.248 A, Supply voltage 12.0 V
   [PASS ] Supply rails       5V0 5.0148 V, 3V3 3.2851 V, 1V8 1.7997 V
   [PASS ] Boot               Boot time 1.86 s
+  [PASS ] Boot log           Known faults 0, Facts changed 0, Missing lines 0
   ...
   [FAIL ] Storage            Reallocated sectors, Pending sectors out of limits
   ...
@@ -57,11 +58,34 @@ catches real failure modes:
 |---|---|---|
 | `short` | short circuit on the 12 V input | Power on — supply hits current limit, power is removed, rest skipped |
 | `rail_1v05` | 1.05 V core rail missing | Supply rails |
-| `boot_hang` | kernel hangs in a SATA reset loop | Boot — timeout, last console line in the report |
+| `boot_hang` | kernel hangs in a SATA reset loop | Boot — timeout, last console line in the report; Boot log — diagnosis `sata-link`, `boot-incomplete` |
+| `sata_slow` | SATA link falls back to 3.0 Gbps, board otherwise fine | Boot log only — diagnosis `sata-link` |
+| `can_missing` | CAN controller not detected, no error printed | Boot log only — diagnosis `can-missing` |
 | `usb_port` | one dead USB port | USB ports |
 | `smart` | SSD with reallocated/pending sectors | Storage |
 | `no_link` | no Ethernet link | Ethernet |
 | `overtemp` | CPU running hot | Temperature |
+
+## Boot log check
+
+A board can boot, log in and pass every on-device check while something is
+already wrong: a SATA link at half speed, a controller nothing in the sequence
+talks to. So the console output of each boot is compared with the log of a
+known-good board, using [boot-log-diff](https://github.com/steitec/boot-log-diff):
+timestamps, addresses and other values that change between boots are masked,
+and each deviation fails the "Boot log" step. Known faults get a diagnosis in
+the report, also when the boot hangs.
+
+```yaml
+boot:
+  golden_log: golden_boot.log   # relative to station.yaml; leave out to skip the step
+  mask: ['epc-[0-9a-f]+']       # values that differ between good boards
+  ignore: ['optional-module']   # lines to leave out
+  rules: [our-boards.toml]      # own known faults
+```
+
+To create the golden log for your board, save the console output of one boot of
+a known-good unit, from power-on up to the login prompt.
 
 ## Architecture
 

@@ -11,6 +11,8 @@ from typing import Callable
 
 import pyvisa
 import yaml
+from boot_log_diff import BUILTIN_RULES, Mask, Normalizer, compare, load_rules
+from boot_log_diff.report import render_text
 
 from .drivers import ConsoleTimeout, Multimeter, Multiplexer, PowerSupply, SerialConsole
 
@@ -50,6 +52,8 @@ class TestRun:
     steps: list[StepResult] = field(default_factory=list)
     instruments: dict[str, str] = field(default_factory=dict)
     console_log: str = ""
+    boot_faults: list[dict] = field(default_factory=list)
+    boot_diff: str = ""
     duration_s: float = 0.0
 
     @property
@@ -66,14 +70,38 @@ class Abort(Exception):
 
 
 def load_config(path: str | Path) -> dict:
+    """Read a station config; files it names are relative to the config itself."""
     with open(path, encoding="utf-8") as f:
-        return yaml.safe_load(f)
+        config = yaml.safe_load(f)
+    base = Path(path).parent
+    boot = config.get("boot") or {}
+    if boot.get("golden_log"):
+        boot["golden_log"] = str(base / boot["golden_log"])
+    if boot.get("rules"):
+        boot["rules"] = [str(base / rules) for rules in boot["rules"]]
+    return config
 
 
 class EndOfLineTest:
     def __init__(self, config: dict, on_step: Callable[[StepResult], None] | None = None):
         self.cfg = config
         self.on_step = on_step or (lambda step: None)
+        self._load_boot_check()  # a bad file must stop us before the power goes on
+
+    def _load_boot_check(self) -> None:
+        b = self.cfg.get("boot") or {}
+        self.golden_log = None
+        if not b.get("golden_log"):
+            return
+        self.golden_name = Path(b["golden_log"]).name
+        with open(b["golden_log"], encoding="utf-8") as f:
+            self.golden_log = f.read()
+        self.boot_rules = [rule for path in b.get("rules", []) for rule in load_rules(path)]
+        self.boot_rules += BUILTIN_RULES  # own rules first: they win on the same line or id
+        self.normalizer = Normalizer(
+            extra=[Mask(f"mask{i}", re.compile(p), "<MASK>") for i, p in enumerate(b.get("mask", []))],
+            ignore=[re.compile(p) for p in b.get("ignore", [])],
+        )
 
     def run(self, serial_number: str | None = None) -> TestRun:
         cfg = self.cfg
@@ -91,6 +119,7 @@ class EndOfLineTest:
             ("Power on", self._power_on),
             ("Supply rails", self._rails),
             ("Boot", self._boot),
+            *([("Boot log", self._boot_log)] if self.golden_log is not None else []),
             ("Idle current", self._idle_current),
             ("Identity", self._identity),
             ("Memory", self._memory),
@@ -106,7 +135,7 @@ class EndOfLineTest:
             for name, func in steps:
                 step = StepResult(name)
                 if aborted or (not self.booted and name not in
-                               ("Instrument check", "Power on", "Supply rails", "Boot")):
+                               ("Instrument check", "Power on", "Supply rails", "Boot", "Boot log")):
                     step.status, step.message = SKIP, "skipped after earlier failure"
                 else:
                     aborted = self._execute(step, func)
@@ -186,12 +215,33 @@ class EndOfLineTest:
         try:
             self.console.read_until(b["login_prompt"], b["timeout_s"])
         except ConsoleTimeout as exc:
+            self.boot_output = self.console.log
             last = exc.captured.strip().splitlines()[-1:] or ["<no output>"]
             raise StepFailed(f"no login prompt within {b['timeout_s']} s, last line: {last[0]}")
         step.measurements.append(Measurement(
             "Boot time", round(time.monotonic() - start, 2), "s", high=b["timeout_s"]))
+        self.boot_output = self.console.log  # before the login adds to it
         self.console.login(b["user"])
         self.booted = True
+
+    def _boot_log(self, step: StepResult) -> None:
+        """Compare the console output of this boot with the golden log."""
+        result = compare(self.golden_log, self.boot_output, self.normalizer, rules=self.boot_rules)
+        self.result.boot_diff = render_text(result, self.golden_name, "this boot")
+        self.result.boot_faults = [
+            {"id": fault.rule.id, "title": fault.rule.title, "severity": fault.rule.severity,
+             "diagnosis": fault.rule.diagnosis, "log": fault.log,
+             "lines": [line.text for line in fault.lines]}
+            for fault in result.faults
+        ]
+        s = result.summary()
+        step.measurements += [
+            Measurement("Known faults", s["faults"], high=0),
+            Measurement("Facts changed", s["facts_changed"], high=0),
+            Measurement("Missing lines", s["missing"], high=0),
+            Measurement("New lines", s["new"], high=0),
+        ]
+        step.message = "; ".join(f"{fault.rule.title} ({fault.rule.id})" for fault in result.faults)
 
     def _idle_current(self, step: StepResult) -> None:
         low, high = self.cfg["power"]["idle_current_a"]
