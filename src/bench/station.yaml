@@ -30,6 +30,13 @@ boot:
   timeout_s: 10
   login_prompt: 'login:\s*$'
   user: root
+  # Boot log of a known-good board, relative to this file. Leave it out to skip
+  # the comparison. A deviation fails the "Boot log" step; values that differ
+  # between good boards go in mask (regex -> <MASK>) or ignore (drop the line).
+  golden_log: golden_boot.log
+  mask: []                   # e.g. 'epc-[0-9a-f]+' for host names
+  ignore: []
+  rules: []                  # own known faults, TOML files (see boot-log-diff)
 
 device:
   serial_pattern: '^EPC-\d{2}-\d{5}$'

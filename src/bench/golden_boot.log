@@ -1,0 +1,13 @@
+AMI BIOS v5.27 (C) 2024 BenchSim Embedded
+POST: CPU Intel Atom x6425E @ 2.00GHz ... OK
+POST: Memory 8192 MB DDR4 ... OK
+POST: SATA0 SSD 128GB ... OK
+Booting from SATA0...
+Loading Linux 6.6.0-epc ...
+[    0.000000] Linux version 6.6.0-epc (build@ci) #1 SMP PREEMPT_DYNAMIC
+[    1.204511] ata1: SATA link up 6.0 Gbps (SStatus 133 SControl 300)
+[    1.873320] e1000e 0000:00:1f.6 eth0: registered PHC clock
+[    2.201733] mcp251x spi0.0 can0: MCP2515 successfully initialized
+[    2.410552] systemd[1]: Reached target multi-user.target
+
+epc-test login: 

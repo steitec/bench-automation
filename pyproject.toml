@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bench-automation"
-version = "0.1.0"
+version = "0.2.0"
 description = "End-of-line test station for an embedded PC, with simulated SCPI instruments"
 readme = "README.md"
 license = "MIT"
@@ -16,6 +16,7 @@ dependencies = [
     "pyserial>=3.5",
     "pyyaml>=6.0",
     "scpi-sim>=0.3,<0.7",
+    "boot-log-diff>=0.3,<0.4",
 ]
 
 [project.optional-dependencies]
@@ -28,7 +29,7 @@ bench = "bench.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-bench = ["station.yaml"]
+bench = ["station.yaml", "golden_boot.log"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
