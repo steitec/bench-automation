@@ -81,6 +81,35 @@ class Multiplexer(ScpiInstrument):
         self.write("ROUT:OPEN:ALL")
 
 
+class Oscilloscope(ScpiInstrument):
+    """Command tree of Keysight InfiniiVision scopes."""
+
+    def setup_channel(self, channel: int, volts_per_div: float, center_volts: float) -> None:
+        self.write(f":CHAN{channel}:DISP ON;:CHAN{channel}:SCAL {volts_per_div};:CHAN{channel}:OFFS {center_volts}")
+
+    def arm_single(self, source: int, level: float, time_per_div: float, delay: float) -> None:
+        """Wait for a rising edge. Returns once it is armed: the supply is another connection."""
+        self.write(f":TIM:SCAL {time_per_div};:TIM:POS {delay}")
+        self.write(f":TRIG:SOUR CHAN{source};:TRIG:SLOP POS;:TRIG:LEV {level}")
+        self.query(":SING;:OPER:COND?")
+
+    def wait_for_capture(self, timeout: float) -> bool:
+        end = time.monotonic() + timeout
+        while int(self.query(":OPER:COND?")) & 8:  # bit 3: still running
+            if time.monotonic() > end:
+                return False
+        return True
+
+    def waveform(self, channel: int) -> tuple[list[float], list[float]]:
+        """(seconds after the trigger, volts) of the latest capture."""
+        self.write(f":WAV:SOUR CHAN{channel};:WAV:FORM BYTE")
+        fields = self.query(":WAV:PRE?").split(",")
+        xinc, xorigin, yinc, yorigin, yref = (float(fields[i]) for i in (4, 5, 7, 8, 9))
+        codes = self._inst.query_binary_values(":WAV:DATA?", datatype="B", container=list)
+        return ([xorigin + i * xinc for i in range(len(codes))],
+                [(code - yref) * yinc + yorigin for code in codes])
+
+
 class ConsoleTimeout(TimeoutError):
     def __init__(self, message: str, captured: str):
         super().__init__(message)

@@ -14,9 +14,10 @@ import yaml
 from boot_log_diff import BUILTIN_RULES, Mask, Normalizer, compare, load_rules
 from boot_log_diff.report import render_text
 
-from .drivers import ConsoleTimeout, Multimeter, Multiplexer, PowerSupply, SerialConsole
+from .drivers import ConsoleTimeout, Multimeter, Multiplexer, Oscilloscope, PowerSupply, SerialConsole
 
 PASS, FAIL, ERROR, SKIP = "PASS", "FAIL", "ERROR", "SKIP"
+TRACE_POINTS = 400  # per trace in the report
 
 
 @dataclass
@@ -54,6 +55,7 @@ class TestRun:
     console_log: str = ""
     boot_faults: list[dict] = field(default_factory=list)
     boot_diff: str = ""
+    scope_traces: dict[str, dict] = field(default_factory=dict)
     duration_s: float = 0.0
 
     @property
@@ -80,6 +82,22 @@ def load_config(path: str | Path) -> dict:
     if boot.get("rules"):
         boot["rules"] = [str(base / rules) for rules in boot["rules"]]
     return config
+
+
+def _ramp_time(times: list[float], volts: list[float]) -> float:
+    """From 10 % to 90 % of the final value, which must be above zero."""
+    final = volts[-1]
+    low = next(t for t, v in zip(times, volts) if v > 0.1 * final)
+    high = next(t for t, v in zip(times, volts) if v > 0.9 * final)
+    return high - low
+
+
+def _trace(times: list[float], values: list[float], unit: str) -> dict:
+    """A trace for the report. Each bin keeps its highest value, so a short spike stays visible."""
+    size = max(1, len(values) // TRACE_POINTS + (len(values) % TRACE_POINTS > 0))
+    bins = range(0, len(values), size)
+    return {"unit": unit, "times": [round(times[i], 6) for i in bins],
+            "values": [round(max(values[i:i + size]), 4) for i in bins]}
 
 
 class EndOfLineTest:
@@ -112,6 +130,7 @@ class EndOfLineTest:
         self.psu = PowerSupply(rm, res["psu"])
         self.dmm = Multimeter(rm, res["dmm"])
         self.mux = Multiplexer(rm, res["mux"])
+        self.scope = Oscilloscope(rm, res["scope"]) if "scope" in cfg and "scope" in res else None
         self.console = SerialConsole(res["console"], cfg.get("console_baudrate", 115200))
         self.booted = False
         steps = [
@@ -145,8 +164,9 @@ class EndOfLineTest:
             self.psu.output(False)
             self.mux.open_all()
             run.console_log = self.console.log
-            for closable in (self.console, self.psu, self.dmm, self.mux):
-                closable.close()
+            for closable in (self.console, self.psu, self.dmm, self.mux, self.scope):
+                if closable is not None:
+                    closable.close()
             rm.close()
         if serial_number:
             run.serial_number = serial_number
@@ -176,7 +196,9 @@ class EndOfLineTest:
     # -- steps -------------------------------------------------------------
 
     def _instruments(self, step: StepResult) -> None:
-        for name, inst in (("psu", self.psu), ("dmm", self.dmm), ("mux", self.mux)):
+        for name, inst in (("psu", self.psu), ("dmm", self.dmm), ("mux", self.mux), ("scope", self.scope)):
+            if inst is None:
+                continue
             inst.write("*RST")
             self.result.instruments[name] = inst.idn()
             inst.check_errors()
@@ -185,6 +207,7 @@ class EndOfLineTest:
     def _power_on(self, step: StepResult) -> None:
         p = self.cfg["power"]
         self.psu.configure(p["voltage"], p["current_limit"])
+        self._arm_scope()
         self.psu.output(True)
         peak, end = 0.0, time.monotonic() + p["inrush_window_s"]
         while time.monotonic() < end:
@@ -198,6 +221,40 @@ class EndOfLineTest:
             self.psu.output(False)
             raise Abort(f"supply collapsed to {supply:.2f} V (current limit) -- "
                         "power removed, possible short circuit")
+        self._read_scope(step)
+
+    def _arm_scope(self) -> None:
+        if self.scope is None:
+            return
+        s = self.cfg["scope"]
+        current, rail = s["current"], s["rail"]
+        self.scope.setup_channel(current["channel"], current["volts_per_div"], current["center_volts"])
+        self.scope.setup_channel(rail["channel"], rail["volts_per_div"], rail["center_volts"])
+        self.scope.arm_single(current["channel"], s["trigger_amps"] * current["volts_per_amp"],
+                              s["time_per_div"], 4 * s["time_per_div"])  # the edge one division from the left
+
+    def _read_scope(self, step: StepResult) -> None:
+        if self.scope is None:
+            return
+        s = self.cfg["scope"]
+        if not self.scope.wait_for_capture(s.get("capture_timeout_s", 2)):
+            raise StepFailed("no trigger on the scope: the board drew no current")
+        current, rail = s["current"], s["rail"]
+        times, volts = self.scope.waveform(current["channel"])
+        amps = [v / current["volts_per_amp"] for v in volts]
+        rail_times, rail_volts = self.scope.waveform(rail["channel"])
+        step.measurements += [
+            Measurement("Inrush peak (scope)", round(max(amps), 3), "A", high=self.cfg["power"]["inrush_max_a"]),
+            Measurement(f"Rail {rail['name']} level", round(rail_volts[-1], 3), "V", low=rail["min_volts"]),
+        ]
+        if rail_volts[-1] >= rail["min_volts"]:  # without the rail there is no ramp to time
+            step.measurements.append(Measurement(
+                f"Rail {rail['name']} ramp", round(_ramp_time(rail_times, rail_volts), 5), "s",
+                high=s["max_rail_ramp_s"]))
+        self.result.scope_traces = {
+            "Input current": _trace(times, amps, "A"),
+            f"Rail {rail['name']}": _trace(rail_times, rail_volts, "V"),
+        }
 
     def _rails(self, step: StepResult) -> None:
         for rail in self.cfg["rails"]:
