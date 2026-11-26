@@ -57,3 +57,12 @@ device:
   ethernet: {interface: eth0, min_speed_mbps: 1000}
   max_temperature_c: 80
   max_rtc_drift_s: 120
+
+# Printable test protocol of each unit (protocol.html, made with test-protocol).
+# Leave this section out to skip it; pass --pdf to bench run/demo for a PDF too.
+protocol:
+  product: "EPC-24 panel PC, 12 V"
+  lang: en                   # en or de
+  approver: true             # adds an "Approved by" signature box
+  # company: "Your company"
+  # logo: logo.svg           # relative to this file

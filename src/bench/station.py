@@ -81,6 +81,9 @@ def load_config(path: str | Path) -> dict:
         boot["golden_log"] = str(base / boot["golden_log"])
     if boot.get("rules"):
         boot["rules"] = [str(base / rules) for rules in boot["rules"]]
+    protocol = config.get("protocol") or {}
+    if protocol.get("logo"):
+        protocol["logo"] = str(base / protocol["logo"])
     return config
 
 
