@@ -11,6 +11,9 @@
 - `bench run` and `bench demo` take `--operator NAME` for the protocol and
   `--pdf` for a `protocol.pdf` (WeasyPrint or Chrome/Chromium). If the PDF
   cannot be made, the run's verdict and exit code stay the same.
+- Own driver classes for instruments with another SCPI dialect: `drivers` in
+  `station.yaml` names a `module:Class` or `file.py:Class` per instrument. A
+  wrong entry stops the run before the power goes on.
 - `bench --version`.
 - CI also runs on Windows and macOS.
 - New dependency: test-protocol 0.1.3 or later (pure Python).

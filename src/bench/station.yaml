@@ -13,6 +13,11 @@ resources:
   scope: "TCPIP0::127.0.0.1::5029::SOCKET"
 console_baudrate: 115200
 
+# Own driver classes for instruments with another SCPI dialect, as module:Class or
+# file.py:Class (relative to this file); each derives from the driver in drivers.py.
+# drivers:
+#   psu: my_drivers.py:RigolDP800
+
 power:
   voltage: 12.0
   current_limit: 3.0

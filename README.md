@@ -193,8 +193,34 @@ bench run --config my-station.yaml
 ```
 
 The drivers use common SCPI commands (`VOLT`, `CURR`, `OUTP`, `MEAS:VOLT:DC?`,
-`ROUT:CLOS (@101)`); instruments with different dialects need a small driver
-subclass.
+`ROUT:CLOS (@101)`). For an instrument with another dialect, derive a class from
+the driver in [`drivers.py`](src/bench/drivers.py), override what differs and
+name it in the config:
+
+```python
+# my_drivers.py, next to my-station.yaml
+from bench.drivers import PowerSupply
+
+class RigolDP800(PowerSupply):
+    """Channel 1 of a Rigol DP800."""
+    def configure(self, voltage, current_limit):
+        self.write(f":APPL CH1,{voltage:.3f},{current_limit:.3f}")
+        self.check_errors()
+    def output(self, on):
+        self.write(f":OUTP CH1,{'ON' if on else 'OFF'}")
+    def measure_voltage(self):
+        return self.query_float(":MEAS:VOLT? CH1")
+    def measure_current(self):
+        return self.query_float(":MEAS:CURR? CH1")
+```
+
+```yaml
+drivers:
+  psu: my_drivers.py:RigolDP800     # or an importable module: mypkg.drivers:RigolDP800
+```
+
+The [wiki](https://github.com/steitec/bench-automation/wiki/Real-hardware)
+walks through bringing up a real station.
 
 ## Tests
 
