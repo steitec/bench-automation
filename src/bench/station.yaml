@@ -13,6 +13,11 @@ resources:
   scope: "TCPIP0::127.0.0.1::5029::SOCKET"
 console_baudrate: 115200
 
+# Own driver classes for instruments with another SCPI dialect, as module:Class or
+# file.py:Class (relative to this file); each derives from the driver in drivers.py.
+# drivers:
+#   psu: my_drivers.py:RigolDP800
+
 power:
   voltage: 12.0
   current_limit: 3.0
@@ -57,3 +62,12 @@ device:
   ethernet: {interface: eth0, min_speed_mbps: 1000}
   max_temperature_c: 80
   max_rtc_drift_s: 120
+
+# Printable test protocol of each unit (protocol.html, made with test-protocol).
+# Leave this section out to skip it; pass --pdf to bench run/demo for a PDF too.
+protocol:
+  product: "EPC-24 panel PC, 12 V"
+  lang: en                   # en or de
+  approver: true             # adds an "Approved by" signature box
+  # company: "Your company"
+  # logo: logo.svg           # relative to this file

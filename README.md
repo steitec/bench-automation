@@ -6,6 +6,7 @@
 # bench-automation
 
 [![CI](https://github.com/steitec/bench-automation/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/steitec/bench-automation/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/steitec/bench-automation?v=0.4.0)](https://github.com/steitec/bench-automation/releases)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://github.com/steitec/bench-automation/blob/main/pyproject.toml)
 [![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/steitec/bench-automation/blob/main/LICENSE)
 
@@ -17,7 +18,10 @@ It does what a production test does: power the board up through a lab supply,
 check inrush and idle current, measure every supply rail through a relay
 multiplexer and a DMM, capture the power-on with an oscilloscope, watch the serial
 console during boot and compare it with a golden log, log in, and run on-device checks (identity, RAM, SSD health, USB ports, Ethernet link, CPU
-temperature, RTC). Every unit gets a pass/fail verdict and a report.
+temperature, RTC). Every unit gets a pass/fail verdict, a report and a
+printable test protocol to sign.
+
+More walkthroughs are in the [wiki](https://github.com/steitec/bench-automation/wiki).
 
 ![HTML test report for a unit with an inrush spike that only the oscilloscope catches](docs/report-screenshot.png)
 
@@ -44,10 +48,12 @@ bench demo --fault smart   # SSD with bad sectors -> FAIL in "Storage"
   ...
   Result: FAIL  (EPC-24-00137, 3.4 s)
   Report: reports/EPC-24-00137_20261025-173106/report.html
+  Protocol: reports/EPC-24-00137_20261025-173106/protocol.html
 ```
 
-Each run writes `result.json`, `measurements.csv` and a self-contained
-`report.html` (with the full console log) to `reports/<serial>_<timestamp>/`.
+Each run writes `result.json`, `measurements.csv`, a self-contained
+`report.html` (with the full console log) and the test protocol
+`protocol.html` to `reports/<serial>_<timestamp>/`.
 
 ## Injectable faults
 
@@ -108,6 +114,33 @@ boot:
 To create the golden log for your board, save the console output of one boot of
 a known-good unit, from power-on up to the login prompt.
 
+## Test protocol
+
+The report is for the engineer at the bench; the test protocol is the document
+that goes with the unit. It is made with
+[test-protocol](https://github.com/steitec/test-protocol) from `result.json`:
+verdict, failed checks on top, every measurement with its limits, the console
+log, the SHA-256 of the input for traceability and signature boxes.
+
+![First page of the test protocol of a unit with a worn SSD](docs/protocol-screenshot.png)
+
+```yaml
+protocol:                    # leave the section out to skip the protocol
+  product: "EPC-24 panel PC, 12 V"
+  lang: en                   # en or de
+  approver: true             # adds an "Approved by" signature box
+  company: "Your company"
+  logo: logo.svg             # relative to station.yaml
+```
+
+```bash
+bench demo --fault smart --operator "J. Doe" --pdf
+```
+
+`--operator` fills the "Tested by" box, `--pdf` also writes `protocol.pdf`
+(needs WeasyPrint or Chrome/Chromium). A protocol that cannot be written is a
+warning; the verdict and exit code of the run stay the same.
+
 ## Architecture
 
 ```
@@ -160,8 +193,34 @@ bench run --config my-station.yaml
 ```
 
 The drivers use common SCPI commands (`VOLT`, `CURR`, `OUTP`, `MEAS:VOLT:DC?`,
-`ROUT:CLOS (@101)`); instruments with different dialects need a small driver
-subclass.
+`ROUT:CLOS (@101)`). For an instrument with another dialect, derive a class from
+the driver in [`drivers.py`](src/bench/drivers.py), override what differs and
+name it in the config:
+
+```python
+# my_drivers.py, next to my-station.yaml
+from bench.drivers import PowerSupply
+
+class RigolDP800(PowerSupply):
+    """Channel 1 of a Rigol DP800."""
+    def configure(self, voltage, current_limit):
+        self.write(f":APPL CH1,{voltage:.3f},{current_limit:.3f}")
+        self.check_errors()
+    def output(self, on):
+        self.write(f":OUTP CH1,{'ON' if on else 'OFF'}")
+    def measure_voltage(self):
+        return self.query_float(":MEAS:VOLT? CH1")
+    def measure_current(self):
+        return self.query_float(":MEAS:CURR? CH1")
+```
+
+```yaml
+drivers:
+  psu: my_drivers.py:RigolDP800     # or an importable module: mypkg.drivers:RigolDP800
+```
+
+The [wiki](https://github.com/steitec/bench-automation/wiki/Real-hardware)
+walks through bringing up a real station.
 
 ## Tests
 

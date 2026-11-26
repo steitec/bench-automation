@@ -230,3 +230,41 @@ def test_reports_show_the_power_on_capture(tmp_path):
     html = (folder / "report.html").read_text()
     assert "Power-on capture" in html
     assert "<polyline" in html
+
+
+DRIVER_FILE = '''
+from bench.drivers import PowerSupply
+
+
+class LabelledSupply(PowerSupply):
+    def idn(self):
+        return super().idn() + " (own driver)"
+'''
+
+
+def test_own_driver_from_a_file_next_to_the_config(tmp_path):
+    (tmp_path / "my_drivers.py").write_text(DRIVER_FILE)
+    path = tmp_path / "station.yaml"
+    path.write_text("drivers:\n  psu: my_drivers.py:LabelledSupply\n")
+    config = load_config(_default_config())
+    config["drivers"] = load_config(path)["drivers"]
+    config["boot"]["timeout_s"] = 2
+    with Simulator(time_scale=0.2, ports=dict.fromkeys(Simulator.DEFAULT_PORTS, 0)) as resources:
+        config["resources"] = resources
+        run = EndOfLineTest(config).run()
+    assert run.status == "PASS"
+    assert run.instruments["psu"].endswith("(own driver)")
+
+
+@pytest.mark.parametrize("drivers,error", [
+    ({"psu": "no_colon"}, "module:Class"),
+    ({"psu": "bench.drivers:Nope"}, "cannot load"),
+    ({"psu": "bench.drivers:Multimeter"}, "must derive from PowerSupply"),
+    ({"fan": "bench.drivers:PowerSupply"}, "unknown instrument"),
+    ({"dmm": "missing.py:X"}, "cannot load"),
+])
+def test_bad_driver_stops_before_power_on(drivers, error):
+    config = load_config(_default_config())
+    config["drivers"] = drivers
+    with pytest.raises(ValueError, match=error):
+        EndOfLineTest(config)

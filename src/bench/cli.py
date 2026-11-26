@@ -9,6 +9,8 @@ import sys
 from importlib import resources as pkg_resources
 from pathlib import Path
 
+from . import __version__
+from .protocol import write_protocol
 from .report import write_reports
 from .sim import FAULTS, Simulator
 from .station import EndOfLineTest, StepResult, TestRun, load_config
@@ -25,10 +27,17 @@ def _print_step(step: StepResult) -> None:
     print(f"  {color}[{step.status:5}]{reset} {step.name:<18} {detail}")
 
 
-def _finish(run: TestRun, out: str) -> int:
-    folder = write_reports(run, out)
+def _finish(run: TestRun, config: dict, args: argparse.Namespace) -> int:
+    folder = write_reports(run, args.out)
     print(f"\n  Result: {run.status}  ({run.serial_number}, {run.duration_s:.1f} s)")
     print(f"  Report: {folder / 'report.html'}")
+    if "protocol" in config:  # an empty section means the defaults
+        try:
+            for path in write_protocol(folder, config["protocol"] or {},
+                                       operator=args.operator, pdf=args.pdf):
+                print(f"  Protocol: {path}")
+        except RuntimeError as exc:  # the verdict stands; only the printout is missing
+            print(f"bench: warning: no protocol: {exc}", file=sys.stderr)
     return 0 if run.status == "PASS" else 1
 
 
@@ -39,6 +48,7 @@ def _default_config() -> str:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="bench", description=__doc__)
+    parser.add_argument("--version", action="version", version=f"bench-automation {__version__}")
     sub = parser.add_subparsers(dest="cmd", required=True)
     faults = ", ".join(FAULTS)
 
@@ -50,11 +60,15 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--config", default=_default_config())
     p_run.add_argument("--serial", help="override the serial number read from the device")
     p_run.add_argument("--out", default="reports")
+    p_run.add_argument("--operator", help="name for the test protocol")
+    p_run.add_argument("--pdf", action="store_true", help="also write the protocol as PDF")
 
     p_demo = sub.add_parser("demo", help="start the simulator and run the test against it")
     p_demo.add_argument("--fault", default="none", choices=FAULTS, metavar="FAULT", help=faults)
     p_demo.add_argument("--config", default=_default_config())
     p_demo.add_argument("--out", default="reports")
+    p_demo.add_argument("--operator", help="name for the test protocol")
+    p_demo.add_argument("--pdf", action="store_true", help="also write the protocol as PDF")
 
     args = parser.parse_args(argv)
 
@@ -81,10 +95,10 @@ def main(argv: list[str] | None = None) -> int:
             config["resources"] = res
             print(f"  Simulated device: {FAULTS[args.fault]}\n")
             run = station.run()
-        return _finish(run, args.out)
+        return _finish(run, config, args)
 
     run = station.run(serial_number=args.serial)
-    return _finish(run, args.out)
+    return _finish(run, config, args)
 
 
 if __name__ == "__main__":

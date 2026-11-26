@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import importlib
+import importlib.util
 import re
 import time
 from dataclasses import dataclass, field
@@ -81,6 +83,13 @@ def load_config(path: str | Path) -> dict:
         boot["golden_log"] = str(base / boot["golden_log"])
     if boot.get("rules"):
         boot["rules"] = [str(base / rules) for rules in boot["rules"]]
+    for name, spec in (config.get("drivers") or {}).items():
+        module, sep, cls = str(spec).rpartition(":")
+        if sep and module.endswith(".py"):
+            config["drivers"][name] = f"{base / module}:{cls}"
+    protocol = config.get("protocol") or {}
+    if protocol.get("logo"):
+        protocol["logo"] = str(base / protocol["logo"])
     return config
 
 
@@ -100,11 +109,44 @@ def _trace(times: list[float], values: list[float], unit: str) -> dict:
             "values": [round(max(values[i:i + size]), 4) for i in bins]}
 
 
+DRIVERS = {"psu": PowerSupply, "dmm": Multimeter, "mux": Multiplexer, "scope": Oscilloscope}
+
+
+def _driver_classes(specs: dict) -> dict[str, type]:
+    """The driver class for each instrument: the default or ``module:Class`` from the config.
+
+    The module is an importable name or a ``.py`` file. The class must derive from the
+    default driver, so it has every method the steps call.
+    """
+    classes = dict(DRIVERS)
+    for name, spec in specs.items():
+        if name not in DRIVERS:
+            raise ValueError(f"drivers: unknown instrument {name!r}, use {', '.join(DRIVERS)}")
+        module_name, sep, class_name = str(spec).rpartition(":")
+        if not sep or not module_name or not class_name:
+            raise ValueError(f"drivers.{name}: use 'module:Class' or 'file.py:Class', not {spec!r}")
+        try:
+            if module_name.endswith(".py"):
+                file_spec = importlib.util.spec_from_file_location(Path(module_name).stem, module_name)
+                module = importlib.util.module_from_spec(file_spec)
+                file_spec.loader.exec_module(module)
+            else:
+                module = importlib.import_module(module_name)
+            cls = getattr(module, class_name)
+        except (ImportError, AttributeError, FileNotFoundError) as exc:
+            raise ValueError(f"drivers.{name}: cannot load {spec!r}: {exc}") from None
+        if not (isinstance(cls, type) and issubclass(cls, DRIVERS[name])):
+            raise ValueError(f"drivers.{name}: {class_name} must derive from {DRIVERS[name].__name__}")
+        classes[name] = cls
+    return classes
+
+
 class EndOfLineTest:
     def __init__(self, config: dict, on_step: Callable[[StepResult], None] | None = None):
         self.cfg = config
         self.on_step = on_step or (lambda step: None)
         self._load_boot_check()  # a bad file must stop us before the power goes on
+        self.drivers = _driver_classes(config.get("drivers") or {})
 
     def _load_boot_check(self) -> None:
         b = self.cfg.get("boot") or {}
@@ -127,10 +169,11 @@ class EndOfLineTest:
         t0 = time.monotonic()
         rm = pyvisa.ResourceManager(cfg.get("visa_backend", "@py"))
         res = cfg["resources"]
-        self.psu = PowerSupply(rm, res["psu"])
-        self.dmm = Multimeter(rm, res["dmm"])
-        self.mux = Multiplexer(rm, res["mux"])
-        self.scope = Oscilloscope(rm, res["scope"]) if "scope" in cfg and "scope" in res else None
+        self.psu = self.drivers["psu"](rm, res["psu"])
+        self.dmm = self.drivers["dmm"](rm, res["dmm"])
+        self.mux = self.drivers["mux"](rm, res["mux"])
+        self.scope = (self.drivers["scope"](rm, res["scope"])
+                      if "scope" in cfg and "scope" in res else None)
         self.console = SerialConsole(res["console"], cfg.get("console_baudrate", 115200))
         self.booted = False
         steps = [
